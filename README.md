@@ -18,5 +18,5 @@
 <!-- Snake Animation -->
 <div align="center">
     
-  ![snake gif](https://github.com/glockinhand/glockinhand/snake.svg)
+  ![snake gif](https://github.com/glockinhand/glockinhand/blob/main/snake.svg)
 </div>
